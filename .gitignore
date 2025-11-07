@@ -1,0 +1,114 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Виртуальные окружения
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Логи
+*.log
+web_monitor.log
+*.log.*
+
+# Конфигурационные файлы с секретами
+config.py
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# IDE и редакторы
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Операционные системы
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ChromeDriver (если скачан вручную)
+chromedriver
+chromedriver.exe
+chromedriver_linux64.zip
+chromedriver_mac64.zip
+chromedriver_win32.zip
+
+# Тестирование
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Временные файлы
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# Системные файлы
+*.pid
+*.seed
+*.pid.lock
+
+# Локальные настройки
+local_settings.py
+local_config.py
+
+# Документация и инструкции (опционально)
+ШАГИ_ЗАПУСКА.md
+INSTRUCTION_RTOPERATOR.md
+QUICKSTART.md
+PROJECT_STRUCTURE.md
+

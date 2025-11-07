@@ -1,0 +1,22 @@
+[Unit]
+Description=Web Monitor with Telegram Notifications
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/path/to/py_main_cheker
+Environment="MONITOR_URL=https://www.rtoperator.ru/"
+Environment="MONITOR_SELECTOR=auto"
+Environment="MONITOR_EXPECTED_TEXT=Рождество 2026"
+Environment="TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+Environment="TELEGRAM_CHAT_ID=123456789"
+ExecStart=/usr/bin/python3 /path/to/py_main_cheker/web_monitor.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
