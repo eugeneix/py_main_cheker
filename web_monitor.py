@@ -8,6 +8,8 @@
 import time
 import logging
 import sys
+import os
+import asyncio
 from datetime import datetime
 from typing import Optional
 from selenium import webdriver
@@ -35,7 +37,15 @@ except ImportError:
 try:
     # Python 3.9+
     from zoneinfo import ZoneInfo
-    MOSCOW_TZ = ZoneInfo('Europe/Moscow')
+    try:
+        MOSCOW_TZ = ZoneInfo('Europe/Moscow')
+    except Exception:
+        # Если zoneinfo не может найти таймзону (например, нет tzdata на Windows)
+        try:
+            import pytz
+            MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+        except ImportError:
+            MOSCOW_TZ = None
 except ImportError:
     # Python < 3.9
     try:
@@ -45,13 +55,42 @@ except ImportError:
         # Если pytz не установлен, используем UTC (не рекомендуется)
         MOSCOW_TZ = None
 
+# Настройка кодировки для Windows
+import platform
+if platform.system() == 'Windows':
+    import io
+    # Устанавливаем UTF-8 для stdout на Windows
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    if sys.stderr.encoding != 'utf-8':
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # Настройка логирования
+class SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler с безопасной обработкой Unicode для Windows"""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            # Убираем эмодзи для совместимости с Windows консолью
+            msg = msg.replace('⚠️', '[WARNING]').replace('✅', '[OK]').replace('❌', '[ERROR]')
+            stream.write(msg + self.terminator)
+            self.flush()
+        except UnicodeEncodeError:
+            # Если не удалось закодировать, используем ASCII
+            try:
+                msg = self.format(record).encode('ascii', errors='replace').decode('ascii')
+                stream.write(msg + self.terminator)
+                self.flush()
+            except Exception:
+                self.handleError(record)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('web_monitor.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
+        SafeStreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
@@ -80,20 +119,51 @@ class WebMonitor:
         self.driver: Optional[webdriver.Chrome] = None
         self.bot = Bot(token=telegram_token)
         self.element_found_last_time = True  # Флаг для отслеживания, был ли элемент найден в прошлый раз
+        self.last_ok_notification_time = 0  # Время последнего "OK" уведомления
+        self.ok_notification_interval = 60  # Интервал между "OK" уведомлениями (1 минута)
         
     def _setup_driver(self) -> webdriver.Chrome:
         """Настройка и создание Chrome WebDriver"""
         chrome_options = Options()
-        chrome_options.add_argument('--headless')  # Без графического интерфейса
+        
+        # Проверяем, нужно ли запускать в headless режиме
+        # На Windows для теста можно отключить headless
+        headless_mode = os.getenv('HEADLESS', 'true').lower() == 'true'
+        if headless_mode:
+            chrome_options.add_argument('--headless')  # Без графического интерфейса
+        
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
+        
+        # Отключаем кэш для получения свежих данных каждый раз
+        chrome_options.add_argument('--disable-application-cache')
+        chrome_options.add_argument('--disable-cache')
+        chrome_options.add_argument('--aggressive-cache-discard')
+        chrome_options.add_argument('--disable-background-networking')
+        
+        # Определяем user-agent в зависимости от ОС
+        import platform
+        if platform.system() == 'Windows':
+            chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        else:
+            chrome_options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
         
         # Отключаем логирование Chrome
         chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # Отключаем кэш через preferences
+        prefs = {
+            "profile.default_content_setting_values": {
+                "images": 2,  # Разрешаем изображения, но отключаем кэш
+            },
+            "profile.managed_default_content_settings": {
+                "images": 2
+            }
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
         
         try:
             # Пытаемся найти chromedriver в системе
@@ -210,6 +280,13 @@ class WebMonitor:
                     f"Время: {moscow_time} (МСК)\n"
                     f"Текст: {current_text[:200] if current_text else 'найден'}"
                 )
+            elif message_type == 'ok':
+                message = (
+                    f"✅ Элемент на месте!\n\n"
+                    f"Время: {moscow_time} (МСК)\n"
+                    f"Текст: {current_text[:200] if current_text else 'найден'}\n"
+                    f"Всё в порядке."
+                )
             else:
                 # Стандартное уведомление об изменении
                 message = (
@@ -218,7 +295,25 @@ class WebMonitor:
                     f"Новый текст: {current_text[:200] if current_text else 'не найден'}"
                 )
             
-            self.bot.send_message(chat_id=self.chat_id, text=message)
+            # В python-telegram-bot 20+ методы асинхронные
+            # Создаем новый event loop для каждого вызова
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            async def send_async():
+                # Поддерживаем как Chat ID (число), так и username канала (строка с @)
+                chat_id = self.chat_id
+                # Если это строка и начинается с @, используем как username
+                if isinstance(chat_id, str) and chat_id.startswith('@'):
+                    await self.bot.send_message(chat_id=chat_id, text=message)
+                else:
+                    # Иначе используем как Chat ID (число)
+                    await self.bot.send_message(chat_id=int(chat_id), text=message)
+            
+            loop.run_until_complete(send_async())
             logger.info("Уведомление успешно отправлено в Telegram")
             
         except TelegramError as e:
@@ -234,12 +329,59 @@ class WebMonitor:
             True если проверка прошла успешно, False в случае ошибки
         """
         try:
-            # Открываем или обновляем страницу
-            logger.debug(f"Открываем страницу: {self.url}")
-            self.driver.get(self.url)
+            # Полностью очищаем cookies и кэш перед каждой проверкой
+            logger.debug("Очистка cookies и кэша браузера...")
+            try:
+                self.driver.delete_all_cookies()
+            except Exception as e:
+                logger.debug(f"Не удалось очистить cookies: {e}")
             
-            # Ждем загрузки страницы
+            # Очищаем кэш через JavaScript
+            try:
+                self.driver.execute_script("window.localStorage.clear();")
+                self.driver.execute_script("window.sessionStorage.clear();")
+            except Exception as e:
+                logger.debug(f"Не удалось очистить storage: {e}")
+            
+            # Жестко обновляем страницу с очисткой кэша
+            logger.debug(f"Жесткое обновление страницы: {self.url}")
+            # Добавляем timestamp к URL для обхода кэша браузера
+            import urllib.parse
+            url_with_cache_bust = self.url
+            if '?' in url_with_cache_bust:
+                url_with_cache_bust += f"&_nocache={int(time.time() * 1000)}"
+            else:
+                url_with_cache_bust += f"?_nocache={int(time.time() * 1000)}"
+            
+            # Загружаем страницу с обходом кэша
+            self.driver.get(url_with_cache_bust)
+            
+            # Дополнительно принудительно обновляем страницу
+            self.driver.execute_script("location.reload(true);")  # true = жесткое обновление без кэша
+            time.sleep(1)  # Даем время на обновление
+            
+            # Дополнительно очищаем кэш через JavaScript после загрузки
+            try:
+                self.driver.execute_script("""
+                    if ('caches' in window) {
+                        caches.keys().then(function(names) {
+                            for (let name of names) caches.delete(name);
+                        });
+                    }
+                """)
+            except Exception as e:
+                logger.debug(f"Не удалось очистить кэш через JS: {e}")
+            
+            # Ждем полной загрузки страницы
             time.sleep(3)  # Увеличиваем время для динамических страниц
+            
+            # Дополнительно ждем, пока страница полностью загрузится
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    lambda driver: driver.execute_script('return document.readyState') == 'complete'
+                )
+            except TimeoutException:
+                logger.warning("Страница загружается дольше ожидаемого")
             
             # Если задан ожидаемый текст, используем специальную логику проверки
             if self.expected_text:
@@ -255,6 +397,10 @@ class WebMonitor:
             # Сравниваем с предыдущим значением
             if self.previous_text is None:
                 logger.info(f"Первая проверка. Текущий текст: {current_text[:50]}...")
+                print(f"[OK] Элемент на месте! Текст: {current_text[:50]}...")
+                # Отправляем уведомление при первой проверке
+                self._send_telegram_notification('ok', current_text)
+                self.last_ok_notification_time = time.time()
                 self.previous_text = current_text
                 return True
             
@@ -262,6 +408,7 @@ class WebMonitor:
                 logger.info("Обнаружено изменение текста элемента!")
                 logger.info(f"Было: {self.previous_text[:50]}...")
                 logger.info(f"Стало: {current_text[:50]}...")
+                print("[WARNING] Элемент изменился!")
                 
                 # Отправляем уведомление
                 self._send_telegram_notification('changed', current_text)
@@ -270,6 +417,12 @@ class WebMonitor:
                 self.previous_text = current_text
             else:
                 logger.debug("Текст элемента не изменился")
+                print("[OK] Элемент на месте!")
+                # Отправляем "OK" уведомление периодически (раз в час)
+                current_time = time.time()
+                if current_time - self.last_ok_notification_time >= self.ok_notification_interval:
+                    self._send_telegram_notification('ok', current_text)
+                    self.last_ok_notification_time = current_time
             
             return True
             
@@ -301,28 +454,45 @@ class WebMonitor:
             # Элемент не найден
             if self.element_found_last_time:
                 # Элемент пропал - отправляем уведомление
-                logger.warning(f"⚠️ Элемент '{self.expected_text}' не найден на странице!")
+                logger.warning(f"[WARNING] Элемент '{self.expected_text}' не найден на странице!")
+                print("[WARNING] Элемент отсутствует!")
                 self._send_telegram_notification('missing')
                 self.element_found_last_time = False
             else:
                 logger.debug(f"Элемент '{self.expected_text}' по-прежнему отсутствует")
+                print("[WARNING] Элемент отсутствует!")
             return True
         
         # Элемент найден, проверяем текст
         if self.expected_text.lower() in current_text.lower():
             # Текст соответствует ожидаемому
+            current_time = time.time()
+            should_send_ok = False
+            
             if not self.element_found_last_time:
                 # Элемент снова появился - отправляем уведомление
-                logger.info(f"✅ Элемент '{self.expected_text}' снова найден!")
+                logger.info(f"[OK] Элемент '{self.expected_text}' снова найден!")
+                print("[OK] Элемент на месте!")
                 self._send_telegram_notification('found_again', current_text)
+                self.last_ok_notification_time = current_time
+                should_send_ok = True
             else:
-                logger.debug(f"✅ Элемент '{self.expected_text}' присутствует на странице")
+                logger.info(f"[OK] Элемент '{self.expected_text}' присутствует на странице")
+                print("[OK] Элемент на месте!")
+                
+                # Отправляем "OK" уведомление, если прошло достаточно времени с последнего
+                if current_time - self.last_ok_notification_time >= self.ok_notification_interval:
+                    self._send_telegram_notification('ok', current_text)
+                    self.last_ok_notification_time = current_time
+                    should_send_ok = True
+            
             self.element_found_last_time = True
         else:
             # Текст не соответствует ожидаемому
-            logger.warning(f"⚠️ Элемент найден, но текст изменился!")
+            logger.warning(f"[WARNING] Элемент найден, но текст изменился!")
             logger.warning(f"Ожидался: '{self.expected_text}'")
             logger.warning(f"Найден: '{current_text}'")
+            print(f"[WARNING] Элемент изменился! Ожидался: '{self.expected_text}', найден: '{current_text[:50]}...'")
             self._send_telegram_notification('changed', current_text)
             self.element_found_last_time = False
         
@@ -345,9 +515,24 @@ class WebMonitor:
     def _test_telegram_connection(self) -> bool:
         """Проверка подключения к Telegram"""
         try:
-            # Пытаемся получить информацию о боте
-            bot_info = self.bot.get_me()
-            logger.info(f"Telegram бот подключен: @{bot_info.username}")
+            # В python-telegram-bot 20+ методы асинхронные
+            # Создаем новый event loop для каждого вызова
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            async def test_async():
+                bot_info = await self.bot.get_me()
+                return bot_info.username
+            
+            if loop.is_running():
+                # Если loop уже запущен, используем asyncio.run
+                username = asyncio.run(test_async())
+            else:
+                username = loop.run_until_complete(test_async())
+            logger.info(f"Telegram бот подключен: @{username}")
             return True
         except Exception as e:
             logger.error(f"Ошибка подключения к Telegram: {e}")

@@ -18,5 +18,5 @@ MONITOR_EXPECTED_TEXT = "Рождество 2026"
 TELEGRAM_TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
 
 # ID чата для отправки уведомлений
-TELEGRAM_CHAT_ID = "ВАШ_CHAT_ID_ЗДЕСЬ"
+TELEGRAM_CHAT_ID = "@lelelelasd"
 

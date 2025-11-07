@@ -44,6 +44,10 @@ config.py
 *.key
 *.pem
 
+# Тестовые скрипты с реальными токенами (не коммитить!)
+test_windows.bat
+test_windows.ps1
+
 # IDE и редакторы
 .idea/
 .vscode/
