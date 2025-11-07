@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Веб-монитор с уведомлениями в Telegram
-Проверяет изменения текста элемента на веб-странице каждые 60 секунд
+Проверяет изменения текста элемента на веб-странице каждые 3 минуты
 """
 
 import time
@@ -120,7 +120,7 @@ class WebMonitor:
         self.bot = Bot(token=telegram_token)
         self.element_found_last_time = True  # Флаг для отслеживания, был ли элемент найден в прошлый раз
         self.last_ok_notification_time = 0  # Время последнего "OK" уведомления
-        self.ok_notification_interval = 60  # Интервал между "OK" уведомлениями (1 минута)
+        self.ok_notification_interval = 180  # Интервал между "OK" уведомлениями (3 минуты)
         
     def _setup_driver(self) -> webdriver.Chrome:
         """Настройка и создание Chrome WebDriver"""
@@ -589,7 +589,7 @@ class WebMonitor:
                 
                 if success:
                     consecutive_errors = 0
-                    logger.info(f"Проверка завершена. Следующая проверка через 60 секунд...")
+                    logger.info(f"Проверка завершена. Следующая проверка через 3 минуты...")
                 else:
                     consecutive_errors += 1
                     logger.warning(f"Ошибка при проверке (попытка {consecutive_errors}/{max_consecutive_errors})")
@@ -600,8 +600,8 @@ class WebMonitor:
                         self._restart_driver()
                         consecutive_errors = 0
                 
-                # Ждем 60 секунд до следующей проверки
-                time.sleep(60)
+                # Ждем 3 минуты (180 секунд) до следующей проверки
+                time.sleep(180)
                 
             except KeyboardInterrupt:
                 logger.info("Получен сигнал остановки. Завершение работы...")
@@ -617,8 +617,8 @@ class WebMonitor:
                         consecutive_errors = 0
                     except Exception as e2:
                         logger.error(f"Не удалось перезапустить драйвер: {e2}")
-                        logger.error("Ожидание 60 секунд перед следующей попыткой...")
-                        time.sleep(60)
+                        logger.error("Ожидание 3 минут перед следующей попыткой...")
+                        time.sleep(180)
         
         # Закрываем драйвер при выходе
         try:
