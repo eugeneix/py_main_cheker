@@ -1,0 +1,1 @@
+# py_main_cheker
