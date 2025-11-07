@@ -169,6 +169,11 @@ class WebMonitor:
             # Пытаемся найти chromedriver в системе
             service = Service()
             driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Устанавливаем таймауты для операций
+            driver.set_page_load_timeout(30)  # 30 секунд на загрузку страницы
+            driver.implicitly_wait(10)  # 10 секунд на поиск элементов
+            
             logger.info("ChromeDriver успешно инициализирован")
             return driver
         except Exception as e:
@@ -183,25 +188,25 @@ class WebMonitor:
             Текст элемента или None в случае ошибки
         """
         try:
-            # Определяем тип селектора
+            # Определяем тип селектора (таймаут 5 секунд)
             if self.selector.startswith('//') or self.selector.startswith('(//'):
                 # XPath
-                element = WebDriverWait(self.driver, 10).until(
+                element = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.XPATH, self.selector))
                 )
             elif self.selector.startswith('#'):
                 # ID селектор
-                element = WebDriverWait(self.driver, 10).until(
+                element = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.ID, self.selector[1:]))
                 )
             elif self.selector.startswith('.'):
                 # CSS класс
-                element = WebDriverWait(self.driver, 10).until(
+                element = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, self.selector))
                 )
             else:
                 # CSS селектор или другой
-                element = WebDriverWait(self.driver, 10).until(
+                element = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, self.selector))
                 )
             
@@ -230,9 +235,9 @@ class WebMonitor:
             Текст найденного элемента или None
         """
         try:
-            # Ищем элемент, содержащий указанный текст
+            # Ищем элемент, содержащий указанный текст (уменьшаем таймаут до 5 секунд)
             xpath = f"//*[contains(text(), '{text}')]"
-            element = WebDriverWait(self.driver, 10).until(
+            element = WebDriverWait(self.driver, 5).until(
                 EC.presence_of_element_located((By.XPATH, xpath))
             )
             found_text = element.text.strip()
@@ -329,17 +334,25 @@ class WebMonitor:
             True если проверка прошла успешно, False в случае ошибки
         """
         try:
+            # Устанавливаем таймауты для операций
+            self.driver.set_page_load_timeout(30)  # 30 секунд на загрузку страницы
+            self.driver.implicitly_wait(5)  # 5 секунд на поиск элементов
+            
             # Полностью очищаем cookies и кэш перед каждой проверкой
             logger.debug("Очистка cookies и кэша браузера...")
             try:
+                # Очищаем cookies с таймаутом (не критично если не получится)
                 self.driver.delete_all_cookies()
             except Exception as e:
-                logger.debug(f"Не удалось очистить cookies: {e}")
+                logger.debug(f"Не удалось очистить cookies (продолжаем): {e}")
+                # Продолжаем работу даже если не удалось очистить cookies
             
-            # Очищаем кэш через JavaScript
+            # Очищаем кэш через JavaScript (если страница уже загружена)
             try:
-                self.driver.execute_script("window.localStorage.clear();")
-                self.driver.execute_script("window.sessionStorage.clear();")
+                current_url = self.driver.current_url
+                if current_url and current_url != "data:,":
+                    self.driver.execute_script("window.localStorage.clear();")
+                    self.driver.execute_script("window.sessionStorage.clear();")
             except Exception as e:
                 logger.debug(f"Не удалось очистить storage: {e}")
             
@@ -353,12 +366,16 @@ class WebMonitor:
             else:
                 url_with_cache_bust += f"?_nocache={int(time.time() * 1000)}"
             
-            # Загружаем страницу с обходом кэша
-            self.driver.get(url_with_cache_bust)
-            
-            # Дополнительно принудительно обновляем страницу
-            self.driver.execute_script("location.reload(true);")  # true = жесткое обновление без кэша
-            time.sleep(1)  # Даем время на обновление
+            # Загружаем страницу с обходом кэша и таймаутом
+            try:
+                self.driver.set_page_load_timeout(30)
+                self.driver.get(url_with_cache_bust)
+            except TimeoutException:
+                logger.warning("Таймаут при загрузке страницы, пробуем продолжить...")
+                # Продолжаем работу даже при таймауте - возможно страница частично загрузилась
+            except Exception as e:
+                logger.warning(f"Ошибка при загрузке страницы: {e}, пробуем продолжить...")
+                # Продолжаем работу даже при ошибке
             
             # Дополнительно очищаем кэш через JavaScript после загрузки
             try:
@@ -372,16 +389,17 @@ class WebMonitor:
             except Exception as e:
                 logger.debug(f"Не удалось очистить кэш через JS: {e}")
             
-            # Ждем полной загрузки страницы
-            time.sleep(3)  # Увеличиваем время для динамических страниц
+            # Ждем полной загрузки страницы (уменьшаем время ожидания)
+            time.sleep(2)  # Уменьшаем время ожидания
             
-            # Дополнительно ждем, пока страница полностью загрузится
+            # Дополнительно ждем, пока страница полностью загрузится (с меньшим таймаутом)
             try:
-                WebDriverWait(self.driver, 10).until(
+                WebDriverWait(self.driver, 5).until(
                     lambda driver: driver.execute_script('return document.readyState') == 'complete'
                 )
             except TimeoutException:
-                logger.warning("Страница загружается дольше ожидаемого")
+                logger.warning("Страница загружается дольше ожидаемого, продолжаем...")
+                # Продолжаем работу даже если страница не полностью загрузилась
             
             # Если задан ожидаемый текст, используем специальную логику проверки
             if self.expected_text:
